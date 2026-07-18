@@ -470,5 +470,41 @@ app.post('/stamp-signature', async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------
+// BOOTSTRAP — creates a hardcoded first admin account on startup if it
+// doesn't exist yet, so there's no manual Supabase Dashboard step.
+// CHANGE THE PASSWORD (or delete this whole block) once you've logged in —
+// this is a convenience for initial setup only, not something to leave
+// running long-term with a weak hardcoded password.
+// ------------------------------------------------------------
+const BOOTSTRAP_ADMIN_EMAIL = 'admin@kau.edu.sa';
+const BOOTSTRAP_ADMIN_PASSWORD = '123456';
+
+async function ensureBootstrapAdmin() {
+  try {
+    const { data: existing } = await supabase
+      .from('profiles').select('id').eq('email', BOOTSTRAP_ADMIN_EMAIL).maybeSingle();
+    if (existing) {
+      console.log(`bootstrap admin already exists (${BOOTSTRAP_ADMIN_EMAIL}) — skipping`);
+      return;
+    }
+
+    const { data, error } = await supabase.auth.admin.createUser({
+      email: BOOTSTRAP_ADMIN_EMAIL,
+      password: BOOTSTRAP_ADMIN_PASSWORD,
+      email_confirm: true, // skip email verification — this is the bootstrap account
+      user_metadata: { full_name: 'إدارة النظام', role: 'admin' },
+    });
+    if (error) { console.error('bootstrap admin creation failed:', error.message); return; }
+    console.log(`✓ bootstrap admin created: ${BOOTSTRAP_ADMIN_EMAIL} / ${BOOTSTRAP_ADMIN_PASSWORD}`);
+    console.log('  change this password after your first login.');
+  } catch (err) {
+    console.error('bootstrap admin creation error:', err);
+  }
+}
+
 const port = process.env.PORT || 8080;
-app.listen(port, () => console.log(`kau-signing-backend listening on ${port}`));
+app.listen(port, () => {
+  console.log(`kau-signing-backend listening on ${port}`);
+  ensureBootstrapAdmin();
+});
