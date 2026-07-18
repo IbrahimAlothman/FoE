@@ -76,6 +76,42 @@ async function sendSigningEmail({ to, recipientName, docTitle, actionUrl, needsA
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // ------------------------------------------------------------
+// POST /document-file-url   { documentId, variant }
+// variant: 'working' (original/converted PDF) or 'signed' (final signed PDF).
+// Storage RLS alone only lets the uploader (or admin) read a file directly —
+// it can't grant the assigned approver access to someone else's upload.
+// This endpoint checks uploader/approver/admin server-side and issues a
+// short-lived signed URL either way.
+// ------------------------------------------------------------
+app.post('/document-file-url', async (req, res) => {
+  try {
+    const user = await getUserFromRequest(req);
+    if (!user) return res.status(401).json({ error: 'unauthorized' });
+
+    const { documentId, variant } = req.body;
+    const { data: doc, error: docErr } = await supabase
+      .from('documents').select('*').eq('id', documentId).single();
+    if (docErr || !doc) return res.status(404).json({ error: 'document not found' });
+
+    if (doc.uploaded_by !== user.id && doc.approver_id !== user.id) {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+      if (!profile || profile.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
+    }
+
+    const path = variant === 'signed' ? doc.signed_pdf_path : (doc.pdf_file_path || doc.original_file_path);
+    if (!path) return res.status(404).json({ error: 'file not available yet' });
+
+    const { data: signed, error: urlErr } = await supabase.storage.from(BUCKET).createSignedUrl(path, 60 * 20);
+    if (urlErr) return res.status(500).json({ error: 'could not create signed url', detail: urlErr.message });
+
+    res.json({ url: signed.signedUrl });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to get file url', detail: String(err) });
+  }
+});
+
+// ------------------------------------------------------------
 // POST /admin/create-user   { email, fullName, role, department }
 // Admin-only. There is no self-signup anywhere in this system — every
 // account is provisioned here. Creates the auth user via Supabase's invite
