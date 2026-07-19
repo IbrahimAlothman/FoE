@@ -288,6 +288,35 @@ app.post('/admin/login-link', async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------
+// POST /admin/reset-signature   { userId }
+// Admin-only. Deletes a user's saved signature so they can draw a new one
+// on next login. This is the only way a signature can change, by design —
+// no regular user can overwrite their own.
+// ------------------------------------------------------------
+app.post('/admin/reset-signature', async (req, res) => {
+  try {
+    const caller = await getUserFromRequest(req);
+    if (!caller) return res.status(401).json({ error: 'unauthorized' });
+    const { data: callerProfile } = await supabase
+      .from('profiles').select('role,status').eq('id', caller.id).single();
+    if (!callerProfile || callerProfile.role !== 'admin' || callerProfile.status !== 'approved') {
+      return res.status(403).json({ error: 'only an admin can reset a signature' });
+    }
+
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    const { error } = await supabase.from('signatures').delete().eq('user_id', userId);
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ reset: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to reset signature', detail: String(err) });
+  }
+});
+
 
 // ------------------------------------------------------------
 // POST /send-signing-link   { documentId }
