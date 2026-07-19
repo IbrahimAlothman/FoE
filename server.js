@@ -250,6 +250,46 @@ app.post('/admin/reset-password', async (req, res) => {
 });
 
 // ------------------------------------------------------------
+// POST /admin/login-link   { userId }
+// Admin-only. Generates a one-time magic-link sign-in URL for the given
+// account, bypassing password auth entirely. Opening it in a browser tab
+// logs in AS that user. Useful for admin testing/verification, and as a
+// diagnostic: if this also fails, the problem is the account itself
+// (e.g. unconfirmed email, deleted auth user) rather than the password.
+// ------------------------------------------------------------
+app.post('/admin/login-link', async (req, res) => {
+  try {
+    const caller = await getUserFromRequest(req);
+    if (!caller) return res.status(401).json({ error: 'unauthorized' });
+    const { data: callerProfile } = await supabase
+      .from('profiles').select('role,status').eq('id', caller.id).single();
+    if (!callerProfile || callerProfile.role !== 'admin' || callerProfile.status !== 'approved') {
+      return res.status(403).json({ error: 'only an admin can generate sign-in links' });
+    }
+
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    const { data: profile, error: profErr } = await supabase
+      .from('profiles').select('*').eq('id', userId).single();
+    if (profErr || !profile) return res.status(404).json({ error: 'user not found' });
+
+    const { data, error } = await supabase.auth.admin.generateLink({
+      type: 'magiclink',
+      email: profile.email,
+      options: { redirectTo: APP_URL },
+    });
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ link: data.properties.action_link });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to generate sign-in link', detail: String(err) });
+  }
+});
+
+
+// ------------------------------------------------------------
 // POST /send-signing-link   { documentId }
 // Called right after a document is created (or re-sent later). Generates a
 // single-use token and emails the assigned approver a direct link.
