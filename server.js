@@ -207,6 +207,49 @@ app.post('/admin/disable-user', async (req, res) => {
 });
 
 // ------------------------------------------------------------
+// POST /admin/reset-password   { userId }
+// Admin-only. Generates a new random password for an EXISTING account
+// (e.g. they lost the one shown at creation time) and returns it the same
+// way /admin/create-user does — shown to the admin to share, or emailed if
+// Resend is configured.
+// ------------------------------------------------------------
+app.post('/admin/reset-password', async (req, res) => {
+  try {
+    const caller = await getUserFromRequest(req);
+    if (!caller) return res.status(401).json({ error: 'unauthorized' });
+    const { data: callerProfile } = await supabase
+      .from('profiles').select('role,status').eq('id', caller.id).single();
+    if (!callerProfile || callerProfile.role !== 'admin' || callerProfile.status !== 'approved') {
+      return res.status(403).json({ error: 'only an admin can reset passwords' });
+    }
+
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    const { data: profile, error: profErr } = await supabase
+      .from('profiles').select('*').eq('id', userId).single();
+    if (profErr || !profile) return res.status(404).json({ error: 'user not found' });
+
+    const tempPassword = crypto.randomBytes(6).toString('base64url');
+    const { error } = await supabase.auth.admin.updateUserById(userId, { password: tempPassword });
+    if (error) return res.status(400).json({ error: error.message });
+
+    let emailed = false;
+    if (RESEND_API_KEY) {
+      try {
+        await sendWelcomeEmail({ to: profile.email, recipientName: profile.full_name, tempPassword });
+        emailed = true;
+      } catch (e) { console.error('reset-password email failed', e); }
+    }
+
+    res.json({ reset: true, tempPassword, emailed });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to reset password', detail: String(err) });
+  }
+});
+
+// ------------------------------------------------------------
 // POST /send-signing-link   { documentId }
 // Called right after a document is created (or re-sent later). Generates a
 // single-use token and emails the assigned approver a direct link.
