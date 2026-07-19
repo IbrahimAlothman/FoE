@@ -140,18 +140,53 @@ app.post('/admin/create-user', async (req, res) => {
       return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });
     }
 
-    const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
-      data: { full_name: fullName, role, department: department || null },
-      redirectTo: `${APP_URL}/set-password`,
+    // A temporary password, set directly rather than sent via an invite
+    // link — simpler and avoids needing a separate "set password" page.
+    // The new user should change it after their first login.
+    const tempPassword = crypto.randomBytes(6).toString('base64url'); // ~8 chars
+
+    const { data, error } = await supabase.auth.admin.createUser({
+      email,
+      password: tempPassword,
+      email_confirm: true,
+      user_metadata: { full_name: fullName, role, department: department || null },
     });
     if (error) return res.status(400).json({ error: error.message });
 
-    res.json({ created: true, userId: data.user.id });
+    let emailed = false;
+    if (RESEND_API_KEY) {
+      try {
+        await sendWelcomeEmail({ to: email, recipientName: fullName, tempPassword });
+        emailed = true;
+      } catch (e) { console.error('welcome email failed', e); }
+    }
+
+    res.json({ created: true, userId: data.user.id, tempPassword, emailed });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'failed to create user', detail: String(err) });
   }
 });
+
+async function sendWelcomeEmail({ to, recipientName, tempPassword }) {
+  const html = `
+    <div dir="rtl" style="font-family:sans-serif;max-width:520px;margin:auto;">
+      <h2 style="color:#055934;">جامعة الملك عبدالعزيز — نظام التوقيع والاعتماد</h2>
+      <p>مرحبًا ${recipientName}،</p>
+      <p>تم إنشاء حسابك في النظام. بيانات الدخول:</p>
+      <p style="background:#F2F7ED;padding:12px 16px;border-radius:8px;">
+        البريد الإلكتروني: <b>${to}</b><br/>
+        كلمة المرور المؤقتة: <b>${tempPassword}</b>
+      </p>
+      <p style="color:#888;font-size:12px;">يُنصح بتغيير كلمة المرور بعد أول تسجيل دخول.</p>
+    </div>`;
+  const resp = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: FROM_EMAIL, to, subject: 'حسابك في نظام التوقيع والاعتماد', html }),
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+}
 
 // ------------------------------------------------------------
 // POST /admin/disable-user   { userId }
